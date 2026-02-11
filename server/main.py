@@ -5,7 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 import requests
 import google.generativeai as genai
 import os
-import json # Importante para ler a resposta da IA
+import json
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -42,7 +42,7 @@ async def search_products(request: SearchRequest):
             "gl": "br",
             "hl": "pt",
             "api_key": api_key,
-            "num": 12
+            "num": 20  # AUMENTEI PARA 20 RESULTADOS
         }
         
         response = requests.get("https://serpapi.com/search", params=params)
@@ -76,45 +76,47 @@ async def chat_consultant(request: ChatRequest):
         gemini_key = os.getenv("GEMINI_API_KEY")
         genai.configure(api_key=gemini_key)
         
-        # Configuração para resposta JSON (Isso garante que a IA não erre o formato)
         generation_config = {
             "response_mime_type": "application/json",
         }
         
-        model = genai.GenerativeModel('gemini-2.5-flash', generation_config=generation_config) 
+        model = genai.GenerativeModel('gemini-1.5-flash', generation_config=generation_config) 
 
-        # Monta a lista indexada para a IA saber qual número é qual produto
+        # --- AQUI ESTAVA O ERRO ---
+        # Antes estava: enumerate(request.products_context[:10])
+        # Agora lê TUDO:
         products_list_str = ""
-        for i, p in enumerate(request.products_context[:10]):
-            products_list_str += f"ID {i}: {p['title']} | Preço: {p['price']}\n"
+        for i, p in enumerate(request.products_context):
+            products_list_str += f"ID {i}: {p['title']} | Preço: {p['price']} | Loja: {p['source']}\n"
         
         prompt = f"""
-        Você é um assistente de compras.
+        Você é um assistente de compras perito em economia.
         
-        LISTA DE PRODUTOS (com IDs):
+        LISTA COMPLETA DE PRODUTOS ENCONTRADOS (com IDs):
         {products_list_str}
         
         PERGUNTA DO USUÁRIO: "{request.message}"
         
-        Sua tarefa é responder a pergunta e identificar se existe UM produto vencedor/recomendado nessa lista.
+        OBJETIVO:
+        1. Analise TODOS os produtos da lista acima, do primeiro ao último.
+        2. Se o usuário pedir "o mais barato", compare os valores numéricos de todos eles.
+        3. Identifique o vencedor.
         
-        Retorne APENAS um JSON neste formato exato:
+        Retorne APENAS um JSON:
         {{
-            "reply": "Sua resposta textual explicativa aqui...",
-            "recommended_index": 3 (Coloque o número do ID do melhor produto, ou null se não houver recomendação específica)
+            "reply": "Explicação curta citando o produto e o preço.",
+            "recommended_index": (Número do ID do produto vencedor)
         }}
         """
 
         response = model.generate_content(prompt)
-        
-        # A resposta vem como texto JSON, precisamos converter para dicionário Python
         response_data = json.loads(response.text)
         
         return response_data
         
     except Exception as e:
         print(f"Erro IA: {e}")
-        return {"reply": "Tive um erro técnico, mas tente olhar os preços manualmente.", "recommended_index": None}
+        return {"reply": "Tive um erro técnico ao ler a lista, tente novamente.", "recommended_index": None}
 
 if __name__ == "__main__":
     import uvicorn
