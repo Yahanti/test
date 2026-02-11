@@ -31,6 +31,7 @@ class ChatRequest(BaseModel):
 async def search_products(request: SearchRequest):
     api_key = os.getenv("SERPAPI_KEY")
     if not api_key:
+        print("ERRO: SERPAPI_KEY não encontrada!")
         return {"products": []}
 
     print(f"Buscando: {request.query}...")
@@ -42,7 +43,7 @@ async def search_products(request: SearchRequest):
             "gl": "br",
             "hl": "pt",
             "api_key": api_key,
-            "num": 20  # AUMENTEI PARA 20 RESULTADOS
+            "num": 20
         }
         
         response = requests.get("https://serpapi.com/search", params=params)
@@ -67,56 +68,68 @@ async def search_products(request: SearchRequest):
         return {"products": products}
 
     except Exception as e:
-        print(f"Erro: {str(e)}")
+        print(f"Erro Search: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/api/chat")
 async def chat_consultant(request: ChatRequest):
     try:
         gemini_key = os.getenv("GEMINI_API_KEY")
+        if not gemini_key:
+            print("ERRO CRÍTICO: GEMINI_API_KEY não configurada!")
+            return {"reply": "Erro de configuração no servidor (Falta API Key).", "recommended_index": None}
+
         genai.configure(api_key=gemini_key)
         
+        # Configuração simplificada para evitar conflitos
         generation_config = {
-            "response_mime_type": "application/json",
+            "temperature": 0.4,
         }
         
         model = genai.GenerativeModel('gemini-2.5-flash', generation_config=generation_config) 
 
-        # --- AQUI ESTAVA O ERRO ---
-        # Antes estava: enumerate(request.products_context[:10])
-        # Agora lê TUDO:
+        if not request.products_context:
+            return {"reply": "Não encontrei produtos para analisar. Faça uma busca primeiro!", "recommended_index": None}
+
         products_list_str = ""
         for i, p in enumerate(request.products_context):
             products_list_str += f"ID {i}: {p['title']} | Preço: {p['price']} | Loja: {p['source']}\n"
         
         prompt = f"""
-        Você é um assistente de compras perito em economia.
+        Você é um assistente de compras.
         
-        LISTA COMPLETA DE PRODUTOS ENCONTRADOS (com IDs):
+        LISTA DE PRODUTOS:
         {products_list_str}
         
-        PERGUNTA DO USUÁRIO: "{request.message}"
+        USUÁRIO: "{request.message}"
         
-        OBJETIVO:
-        1. Analise TODOS os produtos da lista acima, do primeiro ao último.
-        2. Se o usuário pedir "o mais barato", compare os valores numéricos de todos eles.
-        3. Identifique o vencedor.
-        
-        Retorne APENAS um JSON:
+        Responda APENAS com um JSON puro, sem crases, sem markdown.
+        Formato obrigatório:
         {{
-            "reply": "Explicação curta citando o produto e o preço.",
-            "recommended_index": (Número do ID do produto vencedor)
+            "reply": "Texto curto explicando a escolha.",
+            "recommended_index": 0
         }}
+        Se não houver recomendação clara, use null no index.
         """
 
         response = model.generate_content(prompt)
-        response_data = json.loads(response.text)
         
-        return response_data
+        # --- LIMPEZA DE SEGURANÇA ---
+        # Remove crases e a palavra 'json' se a IA colocar
+        cleaned_text = response.text.replace("```json", "").replace("```", "").strip()
+        
+        print(f"Resposta IA (Raw): {cleaned_text}") # Para debug no Render
+
+        try:
+            response_data = json.loads(cleaned_text)
+            return response_data
+        except json.JSONDecodeError:
+            print("Erro ao converter JSON da IA")
+            return {"reply": "Entendi, mas tive dificuldade técnica para processar. O melhor preço parece ser o primeiro da lista.", "recommended_index": None}
         
     except Exception as e:
-        print(f"Erro IA: {e}")
-        return {"reply": "Tive um erro técnico ao ler a lista, tente novamente.", "recommended_index": None}
+        print(f"ERRO GERAL IA: {str(e)}")
+        return {"reply": f"Ocorreu um erro interno: {str(e)}", "recommended_index": None}
 
 if __name__ == "__main__":
     import uvicorn
